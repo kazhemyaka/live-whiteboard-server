@@ -33,6 +33,11 @@ io.on("connection", (socket) => {
     socket.emit("notes:all", Object.values(rooms[roomId].notes));
   });
 
+  socket.on("room:exists", (roomId, callback) => {
+    const exists = Boolean(rooms[roomId]);
+    callback(exists);
+  });
+
   socket.on("note:create", ({ roomId, note }) => {
     rooms[roomId].notes[note.id] = note;
 
