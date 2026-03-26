@@ -14,7 +14,12 @@ const io = new Server(server, {
   },
 });
 
-const rooms = {}; // { roomId: { notes: {} } }
+const rooms = {}; // { roomId: { notes: {}, users: {} } }
+
+function emitRoomUsers(roomId) {
+  if (!rooms[roomId]) return;
+  io.to(roomId).emit("users:all", Object.values(rooms[roomId].users));
+}
 
 app.get("/", (req, res) => {
   res.send("Server is running");
@@ -23,14 +28,36 @@ app.get("/", (req, res) => {
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  socket.on("join_room", (roomId) => {
+  socket.on("join_room", (payload) => {
+    const roomId = typeof payload === "string" ? payload : payload?.roomId;
+    const user = typeof payload === "object" ? payload?.user : null;
+
+    if (!roomId) return;
+
     socket.join(roomId);
+    socket.data.roomId = roomId;
 
     if (!rooms[roomId]) {
-      rooms[roomId] = { notes: {} };
+      rooms[roomId] = { notes: {}, users: {} };
     }
 
+    rooms[roomId].users[socket.id] = {
+      id: socket.id,
+      name: user?.name || `User-${socket.id.slice(0, 5)}`,
+      joinedAt: Date.now(),
+    };
+
     socket.emit("notes:all", Object.values(rooms[roomId].notes));
+    emitRoomUsers(roomId);
+  });
+
+  socket.on("users:list", (roomId, callback) => {
+    if (!roomId || !rooms[roomId]) {
+      callback([]);
+      return;
+    }
+
+    callback(Object.values(rooms[roomId].users));
   });
 
   socket.on("room:exists", (roomId, callback) => {
@@ -73,6 +100,13 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    const roomId = socket.data.roomId;
+
+    if (roomId && rooms[roomId]?.users?.[socket.id]) {
+      delete rooms[roomId].users[socket.id];
+      emitRoomUsers(roomId);
+    }
+
     console.log("User disconnected:", socket.id);
   });
 });
