@@ -28,7 +28,7 @@ app.get("/", (req, res) => {
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  socket.on("join_room", (payload) => {
+  socket.on("join_room", (payload, callback) => {
     const roomId = typeof payload === "string" ? payload : payload?.roomId;
     const user = typeof payload === "object" ? payload?.user : null;
 
@@ -49,6 +49,8 @@ io.on("connection", (socket) => {
 
     socket.emit("notes:all", Object.values(rooms[roomId].notes));
     emitRoomUsers(roomId);
+
+    if (callback) callback({ ok: true });
   });
 
   socket.on("users:list", (roomId, callback) => {
@@ -65,19 +67,27 @@ io.on("connection", (socket) => {
     callback(exists);
   });
 
-  socket.on("note:create", ({ roomId, note }) => {
+  socket.on("note:create", ({ roomId, note }, callback) => {
+    if (!rooms[roomId]) {
+      if (callback) callback({ ok: false });
+      return;
+    }
     rooms[roomId].notes[note.id] = note;
 
+    if (callback) callback({ ok: true });
     io.to(roomId).emit("note:created", note);
   });
 
-  socket.on("note:update", ({ roomId, note }) => {
+  socket.on("note:update", ({ roomId, note }, callback) => {
     const existing = rooms[roomId]?.notes[note.id];
 
-    if (!existing) return;
+    if (!existing) {
+      if (callback) callback({ ok: false, conflict: true });
+      return;
+    }
 
     if (note.version < existing.version) {
-      socket.emit("note:conflict", note.id);
+      if (callback) callback({ ok: false, conflict: true });
       return;
     }
 
@@ -88,14 +98,19 @@ io.on("connection", (socket) => {
     };
     rooms[roomId].notes[note.id] = updated;
 
+    if (callback) callback({ ok: true });
     io.to(roomId).emit("note:updated", updated);
   });
 
-  socket.on("note:delete", ({ roomId, id }) => {
-    if (!rooms[roomId]) return;
+  socket.on("note:delete", ({ roomId, id }, callback) => {
+    if (!rooms[roomId]) {
+      if (callback) callback({ ok: false });
+      return;
+    }
 
     delete rooms[roomId].notes[id];
 
+    if (callback) callback({ ok: true });
     io.to(roomId).emit("note:deleted", id);
   });
 
@@ -108,6 +123,17 @@ io.on("connection", (socket) => {
     }
 
     console.log("User disconnected:", socket.id);
+  });
+
+  // Guarantee resync on reconnect by restoring room membership
+  socket.on("reconnect", () => {
+    const roomId = socket.data.roomId;
+    if (roomId && rooms[roomId]) {
+      socket.join(roomId);
+      socket.emit("notes:all", Object.values(rooms[roomId].notes));
+      emitRoomUsers(roomId);
+      console.log("User reconnected:", socket.id, "to room:", roomId);
+    }
   });
 });
 
